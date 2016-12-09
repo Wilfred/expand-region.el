@@ -95,17 +95,19 @@ moving point or mark as little as possible."
       (skip-chars-forward er--space-str)
       (setq start (point)))
 
-    (while try-list
+    (dolist (func try-list)
       (save-mark-and-excursion
-       (ignore-errors
-         (funcall (car try-list))
-         (when (and (region-active-p)
+       (let (success)
+         (ignore-errors
+           (funcall func)
+           (setq success t))
+         (when (and success
+                    (region-active-p)
                     (er--this-expansion-is-better start end best-start best-end))
            (setq best-start (point))
            (setq best-end (mark))
            (when (and er--show-expansion-message (not (minibufferp)))
-             (message "%S" (car try-list))))))
-      (setq try-list (cdr try-list)))
+             (message "%S" (car try-list)))))))
 
     (setq deactivate-mark nil)
     ;; if smart cursor enabled, decide to put it at start or end of region:
@@ -122,18 +124,40 @@ moving point or mark as little as possible."
                (= best-end (point-max))) ;; We didn't find anything new, so exit early
       'early-exit)))
 
+(defun er--syntax-in-region (start end)
+  "Return a count of all the syntactic elements between START and END."
+  (let ((pos start)
+        (punctuation 0))
+    (while (<= pos end)
+      (let ((syntax-at-pos (syntax-after pos)))
+        (cond
+         ((memq (car syntax-at-pos) '(4 5))
+          ;; Open or close parenthesis
+          (cl-incf punctuation))
+         ((eq (car syntax-at-pos) 1)
+          ;; Punctuation
+          (cl-incf punctuation))
+         ((eq (car syntax-at-pos) 5)
+          ;; String delimiter
+          (cl-incf punctuation))))
+      (cl-incf pos))
+    punctuation))
+
 (defun er--this-expansion-is-better (start end best-start best-end)
   "t if the current region is an improvement on previous expansions.
 
 This is provided as a separate function for those that would like
 to override the heuristic."
-  (and
-   (<= (point) start)
-   (>= (mark) end)
-   (> (- (mark) (point)) (- end start))
-   (or (> (point) best-start)
-       (and (= (point) best-start)
-            (< (mark) best-end)))))
+  (let ((new-start (point))
+        (new-end (mark)))
+    (and
+     ;; If the new region wholly includes the initial region:
+     (<= new-start start)
+     (>= new-end end)
+     ;; then we want this region if it's 'smaller', that is if it
+     ;; expands over fewer syntactic elements.
+     (<= (er--syntax-in-region new-start new-end)
+         (er--syntax-in-region best-start best-end)))))
 
 (defun er/contract-region (arg)
   "Contract the selected region to its previous size.
